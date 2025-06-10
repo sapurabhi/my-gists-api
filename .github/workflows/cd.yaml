@@ -1,0 +1,85 @@
+name: CD Deploy to EKS
+
+on:
+  push:
+    branches:
+      - solution # Trigger deployment on push to solution (after CI)
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build-and-push-docker # Ensure CI completes and image is pushed
+    permissions:
+      id-token: write # Required for OIDC authentication with AWS
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download image tag artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image-tag
+          path: . # Download to current directory
+
+      - name: Read image tag from file
+        id: read_tag
+        run: |
+          # The image-tag artifact is a file that contains the env var.
+          # Read it and set it as an output.
+          source ./.github_env # This file is named .github_env because the artifact names the variable that.
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ vars.GITHUB_ACTIONS_DEPLOYER_ROLE_NAME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Set up Kubectl and EKS context
+        uses: aws-actions/amazon-eks-setup@v2
+        with:
+          cluster-name: ${{ vars.EKS_CLUSTER_NAME }} # Use the EKS cluster name from Terraform output
+          config-files: ~/.kube/config # Ensures kubeconfig is updated
+
+      - name: Install Helm
+        uses: azure/setup-helm@v1
+        with:
+          version: '3.14.0' # Specify Helm version
+
+      - name: Get ECR repository URL
+        id: get-ecr-url-cd
+        # Replace simple-gists-api with your project_name from Terraform
+        run: echo "ECR_REPO_URL=$(aws ecr describe-repositories --repository-names simple-gists-api-gists-api --query 'repositories[0].repositoryUri' --output text)" >> $GITHUB_ENV
+
+      - name: Deploy with Helm
+        env:
+          ECR_REPO_URL: ${{ env.ECR_REPO_URL }}
+          IMAGE_TAG: ${{ steps.read_tag.outputs.IMAGE_TAG }}
+        run: |
+          helm upgrade --install simple-gists-api-release ./helm/simple-gists-api \
+            --namespace default \
+            --create-namespace \
+            --set image.repository=$ECR_REPO_URL \
+            --set image.tag=$IMAGE_TAG \
+            --set service.type=LoadBalancer # Ensure LoadBalancer for public access
+
+      - name: Wait for LoadBalancer to be ready
+        run: |
+          echo "Waiting for LoadBalancer IP/Hostname..."
+          kubectl get svc simple-gists-api-service --namespace default -o jsonpath='{.status.loadBalancer.ingress[0]}'
+          echo "Waiting for LoadBalancer IP/Hostname..."
+          for i in $(seq 1 60); do # Wait up to 5 minutes (60 * 5s)
+              LB_STATUS=$(kubectl get svc simple-gists-api-service -n default -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+              if [ -z "$LB_STATUS" ]; then
+                  LB_STATUS=$(kubectl get svc simple-gists-api-service -n default -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+              fi
+              if [ -n "$LB_STATUS" ]; then
+                  echo "LoadBalancer is ready: $LB_STATUS"
+                  exit 0
+              fi
+              echo "Still waiting for LoadBalancer... $i/60"
+              sleep 5
+          done
+          echo "Timeout waiting for LoadBalancer."
+          exit 1

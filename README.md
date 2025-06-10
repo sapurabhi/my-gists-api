@@ -196,7 +196,7 @@ helm list
 
 kubectl get deployments -n default -o wide
 kubectl get pods -n default -o wide
-kubectl get services -n default -o wide
+kubectl get services 
 ```
 
 #### G. Access Endpoints
@@ -205,8 +205,13 @@ kubectl get services -n default -o wide
 ```bash
 minikube service simple-gists-api-release --url
 ```
-
 Use the provided URL for curl/browser testing.
+
+
+```bash
+#If using Kind, or if minikube service doesn't work: You might need to use kubectl port-forward to access the service:
+kubectl port-forward service/github-gists-api 8080:8080 #Then, access it via http://localhost:8080.
+```
 
 ---
 
@@ -218,6 +223,7 @@ Use the provided URL for curl/browser testing.
 * `DOCKERHUB_TOKEN`
 * `KUBE_CONFIG_DATA` (Base64 encoded kubeconfig)
 
+```bash
 📦 GitHub Actions CI/CD
 Once the GitHub Actions workflows are configured in your repository (under .github/workflows/), you can trigger them in several ways:
 
@@ -232,7 +238,17 @@ Click Run workflow (select branch if prompted).
 
 Via API (Advanced):
 You can use GitHub's REST API to trigger a workflow dispatch event using a personal access token (PAT).
-
+```
+* **`ci.yaml`:**
+    * Triggers on every push to `solution` (or pull requests).
+    * Builds the Java application.
+    * Runs unit and integration tests.
+    * Builds the Docker image.
+    * Pushes the Docker image to the ECR repository provisioned by Terraform.
+* **`cd.yaml`:**
+    * Triggers on pushes to the `main` branch (after `ci.yaml` completes successfully).
+    * Configures `kubectl` and `helm` to connect to the EKS cluster.
+    * Deploys/updates the application on EKS using the Helm chart, referencing the image pushed to ECR.
 ---
 
 ## 🔧 Testing
