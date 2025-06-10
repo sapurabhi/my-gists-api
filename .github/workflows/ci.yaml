@@ -1,0 +1,43 @@
+name: Build, Test, and Dockerize
+
+on:
+  push:
+    branches:
+      - solution
+  pull_request:
+    branches:
+      - solution
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build and run tests
+        run: mvn clean install
+
+      - name: Build Docker image
+        run: docker build -t github-gists-api:latest .
+
+      - name: Log in to Docker Hub (optional, for registry push)
+        # You would replace this with ECR login if pushing to AWS ECR
+        # For this assignment, pushing to a public registry is not required.
+        # If you were to push, you'd configure secrets for DOCKER_USERNAME and DOCKER_PASSWORD
+        # run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+        if: false # Set to true if you need to push to Docker Hub or ECR
+
+      - name: Push Docker image (optional)
+        # Replace 'your-dockerhub-username' with your actual Docker Hub username
+        # For ECR, you'd use the ECR repo URL
+        # run: docker push your-dockerhub-username/github-gists-api:latest
+        if: false # Set to true if you need to push to Docker Hub or ECR
