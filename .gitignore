@@ -1,0 +1,33 @@
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar # Wrapper JAR itself can be ignored, but not the properties
+.mvn/wrapper/maven-wrapper.properties # Keep this if you use Maven Wrapper
+
+# VS Code
+.vscode/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Logs and other temporary files
+*.log
+*.bak
+*.tmp
+temp/
+tmp/
+
+# JRE crash dumps
+hs_err_pid*.log
+
+# Environment variables or secrets (if applicable)
+.env
+*.env

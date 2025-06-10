@@ -17,25 +17,29 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class GistServerTest {
 
-    private static final int TEST_PORT = 8081; // Use a different port for tests
-    private static ExecutorService executor = Executors.newSingleThreadExecutor();
+    private static final int TEST_PORT = 8081;
+    private static ExecutorService serverExecutor; // Use a dedicated executor for the server
     private static Future<?> serverFuture;
 
     @BeforeAll
     static void startServer() throws IOException {
-        // Start the server in a separate thread
-        serverFuture = executor.submit(() -> {
+        serverExecutor = Executors.newSingleThreadExecutor(); // Initialize here
+        serverFuture = serverExecutor.submit(() -> {
             try {
-                GistServer.main(new String[]{String.valueOf(TEST_PORT)}); // Pass test port to main
+                // Pass TEST_PORT as argument to main
+                GistServer.main(new String[]{String.valueOf(TEST_PORT)});
             } catch (IOException e) {
                 e.printStackTrace();
                 throw new RuntimeException("Failed to start server for tests", e);
             }
         });
 
-        // Give the server a moment to start up
+        // Give the server a moment to start up. Increased sleep time for reliability.
+        // A more robust solution for production-grade tests would be to poll a health endpoint.
         try {
-            Thread.sleep(2000); // Wait 2 seconds for server to bind
+            System.out.println("GistServerTest: Waiting for server to start on port " + TEST_PORT + "...");
+            Thread.sleep(4000); // Increased from 2 seconds to 4 seconds for robustness
+            System.out.println("GistServerTest: Server wait complete.");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -43,18 +47,22 @@ public class GistServerTest {
 
     @AfterAll
     static void stopServer() {
-        // This is a simple server, relies on process termination in real use.
-        // For testing, we stop the executor and assume the server process will exit.
-        executor.shutdownNow();
-        try {
-            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
-                System.err.println("Server thread did not terminate.");
+        System.out.println("GistServerTest: Stopping server...");
+        // Explicitly stop the server via its static method
+        GistServer.stop();
+
+        // Shut down the executor that started the server thread
+        if (serverExecutor != null && !serverExecutor.isShutdown()) {
+            serverExecutor.shutdownNow();
+            try {
+                if (!serverExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    System.err.println("GistServerTest: Server thread did not terminate cleanly within 5 seconds.");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         }
-        // In a real scenario, you'd want to expose a graceful shutdown method in GistServer
-        // For this basic example, we rely on the test process finishing.
+        System.out.println("GistServerTest: Server stopped.");
     }
 
     @Test
@@ -66,6 +74,9 @@ public class GistServerTest {
                 .build();
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        System.out.println("Health Check Response Status: " + response.statusCode());
+        System.out.println("Health Check Response Body: " + response.body());
 
         assertEquals(200, response.statusCode());
         assertEquals("OK", response.body());
@@ -80,6 +91,9 @@ public class GistServerTest {
                 .build();
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        System.out.println("Octocat Gists Response Status: " + response.statusCode());
+        System.out.println("Octocat Gists Response Body: " + response.body());
 
         assertEquals(200, response.statusCode());
         assertTrue(response.body().contains("\"id\":"), "Response body should contain gist ID");
@@ -97,14 +111,14 @@ public class GistServerTest {
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-        assertEquals(404, response.statusCode());
-        assertTrue(response.body().contains("User not found"), "Error message should indicate user not found");
-    }
+        System.out.println("NonExistentUser Response Status: " + response.statusCode());
+        System.out.println("NonExistentUser Response Body: " + response.body()); // Print the actual response body
 
-    // Note: Testing 429 Too Many Requests is difficult in an automated test
-    // without deliberately exhausting the GitHub API rate limit, which is not ideal.
-    // It's covered by the GitHubApiClient unit test if we were to create one separately.
-    // For this simple case, we trust the error handling in GitHubApiClient.
+        assertEquals(404, response.statusCode());
+        // Updated assertion to be more precise for the expected JSON structure
+        assertTrue(response.body().contains("\"error\": \"GitHub user not found:"), "Error message should indicate user not found");
+        assertTrue(response.body().contains("nonexistentuser123456789"), "Error message should contain the username");
+    }
 
     @Test
     void shouldReturn400ForRootPath() throws IOException, InterruptedException {
@@ -115,6 +129,9 @@ public class GistServerTest {
                 .build();
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        System.out.println("Root Path Response Status: " + response.statusCode());
+        System.out.println("Root Path Response Body: " + response.body());
 
         assertEquals(400, response.statusCode());
         assertTrue(response.body().contains("Please specify a GitHub username"), "Error message should indicate missing username");
