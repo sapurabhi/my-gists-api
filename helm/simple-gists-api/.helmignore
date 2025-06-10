@@ -1,0 +1,8 @@
+# Files to ignore when packaging the chart
+.git
+.gitignore
+.DS_Store
+# add other files to ignore here
+# for example:
+# .vscode/
+# .idea/

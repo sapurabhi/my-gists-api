@@ -146,17 +146,28 @@ Follow [Minikube installation guide](https://minikube.sigs.k8s.io/docs/start/).
 #### B. Start Minikube Cluster
 
 ```bash
-minikube start
+minikube start --driver=docker (preferred if Docker Desktop is installed)
 ```
-
-#### C. Build Docker Image Inside Minikube
+#### C. Verify Kubectl Context:
+```bash
+kubectl config current-context
+# Expected output: minikube
+```
 
 ```bash
-eval $(minikube docker-env)
-docker build -t simple-gists-api:latest .
+kubectl get nodes
+# Expected output: minikube Ready ...
 ```
 
-#### D. Deploy with Helm
+#### D. Build Docker Image Inside Minikube
+
+```bash
+minikube docker-env | Invoke-Expression # Connects your shell to Minikube's Docker daemon
+minikube docker-env -U | Invoke-Expression # Disconnects from Minikube's Docker daemon (optional, but good practice)
+ 
+```
+
+#### E. Deploy with Helm
 
 Create a Helm chart (e.g., `charts/simple-gists-api`). Example `values.yaml`:
 
@@ -164,13 +175,35 @@ Create a Helm chart (e.g., `charts/simple-gists-api`). Example `values.yaml`:
 Deploy using:
 
 ```bash
-helm install simple-gists-api ./charts/simple-gists-api
+helm install simple-gists-api ./charts/simple-gists-api #First time installation
+# rebuild docker image if not present -> docker build -t simple-gists-api:latest . 
+cd helm/simple-gists-api
+# Lint your chart for best practices
+helm lint .
+# Install or upgrade your release.
+# We set the image.repository and image.tag to use the locally built image. 
+#PowerShell-specific syntax. for Bash/Linux shells use The backslash \ character instead  . `
+helm upgrade --install simple-gists-api-release . `
+  --set image.repository=docker.io/library/simple-gists-api `
+  --set image.tag=latest `
+  --set service.type=NodePort
+
+```
+#### F. Verify Helm Deployment
+```bash
+helm list
+# Expected output: simple-gists-api-release deployed ...
+
+kubectl get deployments -n default -o wide
+kubectl get pods -n default -o wide
+kubectl get services -n default -o wide
 ```
 
-#### E. Access Endpoints
+#### G. Access Endpoints
+
 
 ```bash
-minikube service simple-gists-api --url
+minikube service simple-gists-api-release --url
 ```
 
 Use the provided URL for curl/browser testing.
