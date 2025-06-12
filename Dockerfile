@@ -1,16 +1,20 @@
-# Use a recent stable OpenJDK base image
-FROM openjdk:17-jdk-slim
-
-# Set the working directory inside the container
+# Stage 1: Build the application
+FROM maven:3.9.6-eclipse-temurin-17 AS build
 WORKDIR /app
+COPY pom.xml .
+COPY src ./src
+RUN mvn clean package -DskipTests
 
-# Copy the built JAR file from your local target directory into the container
-# You need to run 'mvn clean install' locally first to create this JAR.
-COPY target/simple-github-gists-api-1.0.0-SNAPSHOT.jar app.jar
-
-# Expose the port the application listens on
+# Stage 2: Create the final image
+FROM openjdk:17-jdk-slim
+# Create a dedicated non-root user and group
+RUN groupadd --system appuser && useradd --system --gid appuser appuser
+WORKDIR /app
+# Copy the built JAR from the 'build' stage
+COPY --from=build /app/target/*.jar app.jar
+# Set permissions for the appuser to execute the jar
+RUN chown appuser:appuser app.jar
+# Switch to the non-root user
+USER appuser
+ENTRYPOINT ["java", "-jar", "app.jar"]
 EXPOSE 8080
-
-# Command to run the application when the container starts
-# We pass the default port 8080 as an argument, though it's the default anyway.
-ENTRYPOINT ["java", "-jar", "app.jar", "8080"]
