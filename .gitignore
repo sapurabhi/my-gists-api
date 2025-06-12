@@ -24,6 +24,10 @@ Thumbs.db
 *.tmp
 temp/
 tmp/
+target/
+.mvn/
+build/
+*.class
 
 # JRE crash dumps
 hs_err_pid*.log
