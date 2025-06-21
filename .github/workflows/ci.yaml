@@ -1,20 +1,19 @@
-# .github/workflows/ci.yaml
-name: CI: Build, Test, and Push Docker Image
+name: CI -> Build, Test, and Push Docker Image
 
 on:
   push:
     branches:
-      - solution # Trigger on push to the 'solution' branch
+      - main
   pull_request:
     branches:
-      - solution # Trigger on pull request to 'solution'
+      - main
 
 jobs:
-  build-and-push-image: # Renamed job for clarity (was build-and-test)
+  build-and-push-image:
     runs-on: ubuntu-latest
     permissions:
-      contents: read # To checkout the repository
-      id-token: write # Required for OIDC authentication with AWS ECR
+      contents: read
+      id-token: write
 
     steps:
       - name: Checkout code
@@ -25,55 +24,49 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'maven' # Cache Maven dependencies for faster builds
+          cache: 'maven'
 
       - name: Build and run tests
-        run: mvn clean install -DskipDockerBuild # Skip Docker build during Maven build if plugin is used
+        run: mvn clean install -DskipDockerBuild
 
       - name: Set Docker Image Tag
         id: set_image_tag
         run: |
-          # Use short SHA for a unique, immutable tag
           IMAGE_TAG="${{ github.sha }}"
           echo "Generated Image Tag: $IMAGE_TAG"
           echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "$IMAGE_TAG" > image-tag.txt
 
       - name: Configure AWS credentials for ECR
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ secrets.AWS_REGION }}
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ vars.GITHUB_ACTIONS_ECR_PUSH_ROLE_NAME }} # Dedicated role for ECR push
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ vars.ACTIONS_ECR_PUSH_ROLE_NAME }}
 
       - name: Log in to Amazon ECR
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2 # Use this action for ECR login
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Get ECR repository URL
         id: get-ecr-url-ci
-        # Replace 'simple-gists-api-gists-api' with your actual ECR repository name
-        # It's good practice to use a variable for the repo name if it's dynamic.
-        # Example: --repository-names ${{ vars.ECR_REPOSITORY_NAME }}
         run: |
-          ECR_REPO_URL=$(aws ecr describe-repositories --repository-names simple-gists-api-gists-api --query 'repositories[0].repositoryUri' --output text)
-          echo "ECR_REPO_URL=$ECR_REPO_URL" >> $GITHUB_ENV # Set as env var for subsequent steps
+          ECR_REPO_URL=$(aws ecr describe-repositories \
+            --repository-names simple-gists-api-gists-api \
+            --query 'repositories[0].repositoryUri' --output text)
+          echo "ECR_REPO_URL=$ECR_REPO_URL" >> $GITHUB_ENV
 
       - name: Build and Tag Docker Image
-        # Tagging with ECR repository URL and unique SHA
         run: |
           docker build -t "${{ env.ECR_REPO_URL }}:${{ steps.set_image_tag.outputs.image_tag }}" .
-          docker tag "${{ env.ECR_REPO_URL }}:${{ steps.set_image_tag.outputs.image_tag }}" "${{ env.ECR_REPO_URL }}:latest" # Optional: also tag as latest
+          docker tag "${{ env.ECR_REPO_URL }}:${{ steps.set_image_tag.outputs.image_tag }}" "${{ env.ECR_REPO_URL }}:latest"
 
       - name: Push Docker Image to ECR
         run: |
           docker push "${{ env.ECR_REPO_URL }}:${{ steps.set_image_tag.outputs.image_tag }}"
-          docker push "${{ env.ECR_REPO_URL }}:latest" # Push latest tag as well (optional, but common)
+          docker push "${{ env.ECR_REPO_URL }}:latest"
 
       - name: Upload image tag artifact
         uses: actions/upload-artifact@v4
         with:
           name: image-tag-artifact
-          path: |
-            ${{ github.workspace }}/image-tag.txt # A new file containing the tag
-            # We'll create this file with the tag in the previous step
-          # Make sure the file exists before uploading
-          # Let's modify the set_image_tag step to write to a file
+          path: image-tag.txt
