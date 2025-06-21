@@ -1,18 +1,17 @@
-# .github/workflows/cd.yaml
-name: CD: Deploy to EKS
+name: CD -> Deploy to EKS
 
 on:
   push:
     branches:
-      - solution # Trigger deployment on push to 'solution' branch (after CI completes)
+      - main # Trigger deployment on push to 'main' branch
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    needs: build-and-push-image # Ensure CI job (renamed) completes and image is pushed
+    needs: build-and-push-image
     permissions:
-      id-token: write # Required for OIDC authentication with AWS
-      contents: read # To checkout the repository and download artifacts
+      id-token: write   # For OIDC authentication with AWS
+      contents: read     # To checkout the repo and download artifacts
 
     steps:
       - name: Checkout repository
@@ -21,94 +20,74 @@ jobs:
       - name: Download image tag artifact
         uses: actions/download-artifact@v4
         with:
-          name: image-tag-artifact # Must match the artifact name from CI workflow
-          path: ./ # Download to the current directory
+          name: image-tag-artifact
+          path: ./image-tag-artifact
 
       - name: Read image tag from file
         id: read_tag
         run: |
-          # The image-tag-artifact is a file named image-tag.txt
-          # Read its content and set it as a step output.
-          IMAGE_TAG=$(cat ./image-tag-artifact/image-tag.txt) # Assuming artifact downloads to a subfolder
+          IMAGE_TAG=$(cat ./image-tag-artifact/image-tag.txt)
           echo "Retrieved IMAGE_TAG for deployment: $IMAGE_TAG"
-          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT # Set as output for the step
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ vars.GITHUB_ACTIONS_DEPLOYER_ROLE_NAME }}
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ vars.ACTIONS_DEPLOYER_ROLE_NAME }}
           aws-region: ${{ secrets.AWS_REGION }}
-          # Ensure `mask-for-sops` or similar is not needed if this is a non-sensitive role
 
-      - name: Set up Kubectl and EKS context
-        uses: aws-actions/amazon-eks-setup@v2
+      - name: Set up kubectl for EKS
+        uses: aws-actions/amazon-eks-setup-kubectl@v1
         with:
-          cluster-name: ${{ vars.EKS_CLUSTER_NAME }} # Use the EKS cluster name from GitHub Actions Variables
-          config-files: ~/.kube/config # Ensures kubeconfig is updated
+          cluster-name: ${{ vars.EKS_CLUSTER_NAME }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Install Helm
-        uses: azure/setup-helm@v1
+        uses: azure/setup-helm@v3
         with:
-          version: '3.14.0' # Specify Helm version for consistency
+          version: '3.14.0'
 
-      - name: Get ECR repository URL for CD
+      - name: Get ECR repository URL for deployment
         id: get-ecr-url-cd
-        # Replace 'simple-gists-api-gists-api' with your actual ECR repository name
         run: |
           ECR_REPO_URL=$(aws ecr describe-repositories --repository-names simple-gists-api-gists-api --query 'repositories[0].repositoryUri' --output text)
-          echo "ECR_REPO_URL=$ECR_REPO_URL" >> $GITHUB_ENV # Set as env var for subsequent steps
+          echo "ECR_REPO_URL=$ECR_REPO_URL" >> $GITHUB_ENV
 
-      - name: Deploy with Helm
+      - name: Deploy to EKS with Helm
         env:
           ECR_REPO_URL: ${{ env.ECR_REPO_URL }}
-          IMAGE_TAG: ${{ steps.read_tag.outputs.image_tag }} # Use the tag from the artifact
+          IMAGE_TAG: ${{ steps.read_tag.outputs.image_tag }}
         run: |
-          echo "Deploying Helm chart with Image: $ECR_REPO_URL:$IMAGE_TAG"
+          echo "Deploying to EKS with image: $ECR_REPO_URL:$IMAGE_TAG"
           helm upgrade --install simple-gists-api-release ./helm/simple-gists-api \
             --namespace default \
             --create-namespace \
+            --values helm/simple-gists-api/values-prod.yaml \
             --set image.repository=$ECR_REPO_URL \
             --set image.tag=$IMAGE_TAG \
-            --set service.type=LoadBalancer \
-            --atomic # Ensures a full rollback on failed upgrade
+            --atomic
 
-      - name: Wait for LoadBalancer to be ready
+      - name: Wait for LoadBalancer IP/Hostname
         id: lb_status
         run: |
-          echo "Waiting for LoadBalancer IP/Hostname..."
-          LB_ENDPOINT=""
-          for i in $(seq 1 120); do # Wait up to 10 minutes (120 * 5s)
-              # Try to get hostname first, then IP if hostname is empty
-              LB_HOSTNAME=$(kubectl get svc simple-gists-api-service -n default -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-              if [ -n "$LB_HOSTNAME" ]; then
-                  LB_ENDPOINT="$LB_HOSTNAME"
-                  break
-              fi
-              LB_IP=$(kubectl get svc simple-gists-api-service -n default -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-              if [ -n "$LB_IP" ]; then
-                  LB_ENDPOINT="$LB_IP"
-                  break
-              fi
-              echo "Still waiting for LoadBalancer... $i/120"
-              sleep 5
+          echo "Waiting for LoadBalancer..."
+          for i in $(seq 1 120); do
+            LB_HOSTNAME=$(kubectl get svc simple-gists-api-release -n default -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+            if [ -n "$LB_HOSTNAME" ]; then
+              echo "LoadBalancer Hostname: $LB_HOSTNAME"
+              echo "lb_url=$LB_HOSTNAME" >> $GITHUB_OUTPUT
+              break
+            fi
+            echo "Waiting... ($i/120)"
+            sleep 5
           done
 
-          if [ -n "$LB_ENDPOINT" ]; then
-              echo "LoadBalancer is ready: $LB_ENDPOINT"
-              echo "lb_url=$LB_ENDPOINT" >> $GITHUB_OUTPUT # Set LoadBalancer URL as a step output
-          else
-              echo "Timeout waiting for LoadBalancer. Check service status with 'kubectl get svc simple-gists-api-service -n default'."
-              exit 1
-          fi
-
-      - name: Verify Deployment (Optional)
-        # Add a curl or HTTP GET request to the LoadBalancer URL to verify application health.
-        # This requires the LB_ENDPOINT from the previous step.
+      - name: Verify deployment
         run: |
           if [ -n "${{ steps.lb_status.outputs.lb_url }}" ]; then
-            echo "Verifying application at: http://${{ steps.lb_status.outputs.lb_url }}/health"
-            curl -f --retry 10 --retry-connrefused --retry-max-time 60 http://${{ steps.lb_status.outputs.lb_url }}/health || { echo "Health check failed!"; exit 1; }
-            echo "Application health check passed."
+            echo "Checking application health at: http://${{ steps.lb_status.outputs.lb_url }}/health"
+            curl --fail --retry 10 --retry-delay 5 http://${{ steps.lb_status.outputs.lb_url }}/health
           else
-            echo "LoadBalancer URL not available for health check."
+            echo "LoadBalancer URL not available."
+            exit 1
           fi
