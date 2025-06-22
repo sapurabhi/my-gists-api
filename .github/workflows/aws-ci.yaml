@@ -1,4 +1,4 @@
-name: CI -> Build, Test, and Push Docker Image
+name: AWS-CI -> Build, Test, and Push Docker Image
 
 on:
   #push:
