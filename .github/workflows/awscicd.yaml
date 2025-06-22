@@ -103,7 +103,7 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Set up kubectl for EKS
-        uses: aws-actions/amazon-eks-setup-kubectl@v2
+        uses: aws-actions/amazon-eks-setup@v2
         with:
           cluster-name: ${{ vars.EKS_CLUSTER_NAME }}
           aws-region: ${{ secrets.AWS_REGION }}
