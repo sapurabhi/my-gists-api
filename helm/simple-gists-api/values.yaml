@@ -1,31 +1,32 @@
 # helm/simple-gists-api/values.yaml
-# Default values for simple-gists-api.
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
 
-replicaCount: 2
+# Replica count for local development
+replicaCount: 1
 
+# Image configuration for local development
 image:
-  repository: # Placeholder, will be set by CI/CD (e.g., from ECR or Docker Hub)
-  pullPolicy: IfNotPresent # AlwaysPull in production after first deploy if using immutable tags
-  # Overrides the image tag whose default is the chart appVersion.
-  tag: "" # Placeholder, will be set by CI/CD (e.g., GITHUB_SHA)
+  # The name of the image built directly into Minikube's image cache
+  # This matches the 'docker build -t simple-gists-api:latest .' command
+  repository: simple-gists-api
+  tag: latest
+  pullPolicy: IfNotPresent # Ensures Minikube uses its local cached image if available
 
+# Service configuration for local development
 service:
-  type: NodePort # Changed from LoadBalancer to NodePort for local Minikube access
+  type: NodePort # Exposes the service via a NodePort for local Minikube access
   port: 80
-  targetPort: 8080
+  targetPort: 8080 # The port your application listens on inside the container
 
+# Resource requests and limits (can be minimal for local dev)
 resources:
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # decision for the user. This is just an example.
   requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
     cpu: 200m
     memory: 256Mi
-  limits:
-    cpu: 500m
-    memory: 512Mi
 
+# Liveness and Readiness Probes (assuming /health endpoint on targetPort 8080)
 livenessProbe:
   httpGet:
     path: /health
@@ -39,15 +40,14 @@ readinessProbe:
   httpGet:
     path: /health
     port: 8080
-  initialDelaySeconds: 20
-  periodSeconds: 10
-  timeoutSeconds: 5
-  failureThreshold: 3
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 1
 
-# Configuration for Horizontal Pod Autoscaler (HPA)
+# Configuration for Horizontal Pod Autoscaler (HPA) - disabled by default
 autoscaling:
-  enabled: false # Set to true to enable HPA
+  enabled: false
   minReplicas: 1
   maxReplicas: 3
-  targetCPUUtilizationPercentage: 80 # Default HPA target for CPU
-  # targetMemoryUtilizationPercentage: 80 # Uncomment and configure for memory-based autoscaling
+  targetCPUUtilizationPercentage: 80
