@@ -1,5 +1,5 @@
 # .github/workflows/ci-cd.yaml
-name: CI → Build Docker Image and Push to Docker Hub
+name: MINIKUBE-CI → Build Docker Image and Push to Docker Hub
 
 on:
   push:
