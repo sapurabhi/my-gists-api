@@ -1,3 +1,4 @@
+# .github/workflows/ci-cd.yaml (You can keep this as a single file or split into ci.yaml and cd.yaml)
 name: CI/CD → Build Docker and Deploy to EKS
 
 on:
@@ -7,15 +8,15 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual trigger of the workflow
 
 jobs:
   build-and-push-image:
     name: CI – Build, Test, Push to ECR
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      id-token: write
+      contents: read # To checkout the repository code
+      id-token: write # Required for OIDC authentication with AWS ECR
 
     steps:
       - name: Checkout code
@@ -26,23 +27,25 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: 'maven'
+          cache: 'maven' # Cache Maven dependencies for faster builds
 
       - name: Build and run tests
-        run: mvn clean install -DskipDockerBuild
+        run: mvn clean install -DskipDockerBuild # Skip Docker build during Maven build if plugin is used
 
-      - name: Set Docker Image Tag
+      - name: Set Docker Image Tag and Save to File
         id: set_image_tag
         run: |
+          # Use short SHA for a unique, immutable tag
           IMAGE_TAG="${{ github.sha }}"
           echo "Generated Image Tag: $IMAGE_TAG"
-          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-          echo "$IMAGE_TAG" > image-tag.txt
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT # Set as output for this job
+          echo "$IMAGE_TAG" > image-tag.txt # Save to a file for artifact upload
 
-      - name: Configure AWS credentials for ECR
+      - name: Configure AWS credentials for ECR Push
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ secrets.AWS_REGION }}
+          # This role should have permissions to push images to ECR
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ vars.ACTIONS_ECR_PUSH_ROLE_NAME }}
 
       - name: Log in to Amazon ECR
@@ -51,34 +54,36 @@ jobs:
       - name: Get ECR repository URL
         id: get-ecr-url
         run: |
+          # Replace 'simple-gists-api-gists-api' with your actual ECR repository name
           ECR_REPO_URL=$(aws ecr describe-repositories \
             --repository-names simple-gists-api-gists-api \
             --query 'repositories[0].repositoryUri' --output text)
-          echo "ECR_REPO_URL=$ECR_REPO_URL" >> $GITHUB_ENV
+          echo "ECR_REPO_URL=$ECR_REPO_URL" >> $GITHUB_ENV # Set as an environment variable for subsequent steps
 
       - name: Build and Tag Docker Image
         run: |
           docker build -t "${{ env.ECR_REPO_URL }}:${{ steps.set_image_tag.outputs.image_tag }}" .
+          # Optionally, also tag as latest (useful for local development or non-production environments)
           docker tag "${{ env.ECR_REPO_URL }}:${{ steps.set_image_tag.outputs.image_tag }}" "${{ env.ECR_REPO_URL }}:latest"
 
       - name: Push Docker Image to ECR
         run: |
           docker push "${{ env.ECR_REPO_URL }}:${{ steps.set_image_tag.outputs.image_tag }}"
-          docker push "${{ env.ECR_REPO_URL }}:latest"
+          docker push "${{ env.ECR_REPO_URL }}:latest" # Push latest tag as well
 
       - name: Upload image tag artifact
         uses: actions/upload-artifact@v4
         with:
           name: image-tag-artifact
-          path: image-tag.txt
+          path: image-tag.txt # The file created in 'Set Docker Image Tag and Save to File' step
 
   deploy:
     name: CD – Deploy to EKS
     runs-on: ubuntu-latest
-    needs: build-and-push-image
+    needs: build-and-push-image # Ensure the CI job completes successfully before deployment
     permissions:
-      id-token: write
-      contents: read
+      id-token: write # Required for OIDC authentication with AWS EKS
+      contents: read # To checkout the repository and download artifacts
 
     steps:
       - name: Checkout repository
@@ -88,34 +93,40 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: image-tag-artifact
-          path: ./image-tag-artifact
+          path: ./image-tag-artifact # Downloads the artifact into a subfolder named 'image-tag-artifact'
 
       - name: Read image tag from file
         id: read_tag
         run: |
+          # The artifact is downloaded into './image-tag-artifact/', so the file is at that path
           IMAGE_TAG=$(cat ./image-tag-artifact/image-tag.txt)
-          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "Retrieved IMAGE_TAG for deployment: $IMAGE_TAG"
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT # Set as output for this step
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials for EKS Deployment
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ vars.ACTIONS_ECR_PUSH_ROLE_NAME }}
           aws-region: ${{ secrets.AWS_REGION }}
+          # Best Practice: Use a dedicated role for EKS deployment with kubectl/Helm permissions.
+          # This should be different from the ECR push role for least privilege.
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ vars.ACTIONS_EKS_DEPLOYER_ROLE_NAME }} # Corrected variable name for clarity
 
-      - name: Set up kubectl for EKS
-        uses: aws-actions/amazon-eks-setup@v2
+      - name: Set up kubectl and EKS context
+        # FIX: The correct action name is 'aws-actions/amazon-eks-setup' NOT 'aws-actions/amazon-eks-setup-kubectl'
+        uses: aws-actions/amazon-eks-setup@v2 # <--- CORRECTED ACTION NAME
         with:
           cluster-name: ${{ vars.EKS_CLUSTER_NAME }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }} # This is usually not needed here as configure-aws-credentials sets it globally
 
       - name: Install Helm
-        uses: azure/setup-helm@v3
+        uses: azure/setup-helm@v3 # Using v3 for consistency and latest features
         with:
-          version: '3.14.0'
+          version: '3.14.0' # Specify Helm version for consistency
 
       - name: Get ECR repository URL
-        id: get-ecr-url
+        id: get-ecr-url-deploy # Changed ID to avoid conflict if both jobs had same ID
         run: |
+          # Replace 'simple-gists-api-gists-api' with your actual ECR repository name
           ECR_REPO_URL=$(aws ecr describe-repositories \
             --repository-names simple-gists-api-gists-api \
             --query 'repositories[0].repositoryUri' --output text)
@@ -124,36 +135,55 @@ jobs:
       - name: Deploy to EKS using Helm
         env:
           ECR_REPO_URL: ${{ env.ECR_REPO_URL }}
-          IMAGE_TAG: ${{ steps.read_tag.outputs.image_tag }}
+          IMAGE_TAG: ${{ steps.read_tag.outputs.image_tag }} # Use the tag read from the artifact
         run: |
+          echo "Deploying Helm chart with Image: $ECR_REPO_URL:$IMAGE_TAG"
           helm upgrade --install simple-gists-api-release ./helm/simple-gists-api \
             --namespace default \
             --create-namespace \
             --values helm/simple-gists-api/values-prod.yaml \
             --set image.repository=$ECR_REPO_URL \
             --set image.tag=$IMAGE_TAG \
-            --atomic
+            --atomic # Ensures a full rollback on failed upgrade
 
-      - name: Wait for LoadBalancer IP
+      - name: Wait for LoadBalancer IP/Hostname
         id: lb_status
         run: |
-          echo "Waiting for LoadBalancer..."
-          for i in $(seq 1 120); do
-            LB_HOSTNAME=$(kubectl get svc simple-gists-api-release -n default -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-            if [ -n "$LB_HOSTNAME" ]; then
-              echo "lb_url=$LB_HOSTNAME" >> $GITHUB_OUTPUT
-              break
-            fi
-            sleep 5
+          echo "Waiting for LoadBalancer to be ready..."
+          LB_ENDPOINT=""
+          for i in $(seq 1 120); do # Wait up to 10 minutes (120 * 5s)
+              # Try to get hostname first, then IP if hostname is empty
+              LB_HOSTNAME=$(kubectl get svc simple-gists-api-release -n default -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+              if [ -n "$LB_HOSTNAME" ]; then
+                  LB_ENDPOINT="$LB_HOSTNAME"
+                  break
+              fi
+              LB_IP=$(kubectl get svc simple-gists-api-release -n default -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+              if [ -n "$LB_IP" ]; then
+                  LB_ENDPOINT="$LB_IP"
+                  break
+              fi
+              echo "Still waiting for LoadBalancer... Attempt $i/120"
+              sleep 5
           done
 
-      - name: Verify deployment
-        run: |
-          if [ -n "${{ steps.lb_status.outputs.lb_url }}" ]; then
-            echo "Checking app health at: http://${{ steps.lb_status.outputs.lb_url }}/health"
-            curl --fail --retry 10 --retry-delay 5 http://${{ steps.lb_status.outputs.lb_url }}/health
+          if [ -n "$LB_ENDPOINT" ]; then
+              echo "LoadBalancer is ready: $LB_ENDPOINT"
+              echo "lb_url=$LB_ENDPOINT" >> $GITHUB_OUTPUT # Set LoadBalancer URL as a step output
           else
-            echo "LoadBalancer URL not available."
-            exit 1
+              echo "Timeout waiting for LoadBalancer. Check service status with 'kubectl get svc simple-gists-api-release -n default'."
+              exit 1 # Fail the workflow if LB not ready
           fi
 
+      - name: Verify Deployment Health Check
+        run: |
+          if [ -n "${{ steps.lb_status.outputs.lb_url }}" ]; then
+            echo "Performing health check at: http://${{ steps.lb_status.outputs.lb_url }}/health"
+            # Use curl --fail to ensure non-2xx status codes cause an error
+            # --retry and --retry-delay for robustness against initial startup
+            curl --fail --retry 10 --retry-delay 5 http://${{ steps.lb_status.outputs.lb_url }}/health || { echo "Health check failed after multiple retries!"; exit 1; }
+            echo "Application health check passed successfully."
+          else
+            echo "LoadBalancer URL not available for health verification. Skipping health check."
+            exit 1 # Fail as a critical verification cannot proceed
+          fi
