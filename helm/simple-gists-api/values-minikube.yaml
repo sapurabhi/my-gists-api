@@ -1,0 +1,50 @@
+# helm/simple-gists-api/values-minikube.yaml
+
+# Replica count for a "production-like" deployment
+replicaCount: 2
+
+# Image configuration for Minikube deployment, pulling from Docker Hub
+image:
+  # Your Docker Hub username and repository name
+  repository: karimfusion/github-gists-api
+  tag: latest
+  pullPolicy: Always # Always pull the image in a production-like scenario to ensure latest version
+
+# Service configuration for Minikube deployment
+service:
+  type: LoadBalancer # Minikube simulates a LoadBalancer, making it easier to access externally
+
+# Resource requests and limits (can be more generous for prod-like)
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Liveness and Readiness Probes (can be adjusted for prod-like)
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 30 # Longer initial delay for prod-like startup
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 1
+
+# Configuration for Horizontal Pod Autoscaler (HPA) - can be enabled here for prod-like
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70 # More aggressive autoscaling for prod-like
